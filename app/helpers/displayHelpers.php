@@ -7,7 +7,7 @@
  * ----------------------------------------------------------------------
  *
  * Software by Whirl-i-Gig (http://www.whirl-i-gig.com)
- * Copyright 2009-2014 Whirl-i-Gig
+ * Copyright 2009-2016 Whirl-i-Gig
  *
  * For more information visit http://www.CollectiveAccess.org
  *
@@ -46,7 +46,7 @@ require_once(__CA_LIB_DIR__.'/core/Parsers/ganon.php');
  * More about bundle display templates here: http://docs.collectiveaccess.org/wiki/Bundle_Display_Templates
  */
 
-define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-z0-9]+\[[\@\[\]\=\'A-Za-z0-9\.\-\/]+|[A-Za-z0-9_\.:\/]+[%]{1}[^ \^\t\r\n\"\'<>\(\)\{\}\/]*|[A-Za-z0-9_\.\/]+[:]{1}[A-Za-z0-9_\.\/]+|[A-Za-z0-9_\.\/]+[~]{1}[A-Za-z0-9]+[:]{1}[A-Za-z0-9_\.\/]+|[A-Za-z0-9_\.\/]+)/");
+define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^(ca_[A-Za-z]+[A-Za-z0-9_\-\.]+[A-Za-z0-9]{1}[\&\%]{1}[^ <]+|ca_[A-Za-z]+[A-Za-z0-9_\-\.]+[A-Za-z0-9]{1}|[0-9]+(?=[.,;])|[\/A-Za-z0-9]+\[[\@\[\]\=\'A-Za-z0-9\.\-\/]+|[A-Za-z0-9_\.:\/]+[%]{1}[^ \^\t\r\n\"\'<>\(\)\{\}\/]*|[A-Za-z0-9_\.\/]+[:]{1}[A-Za-z0-9_\.\/]+|[A-Za-z0-9_\.\/]+[~]{1}[A-Za-z0-9]+[:]{1}[A-Za-z0-9_\.\/]+|[A-Za-z0-9_\.\/]+)/");
 	
 	# ------------------------------------------------------------------------------------------------
 	/**
@@ -647,7 +647,7 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		if ($vs_type_name == "list item") {
 			$vs_style = "style='height:auto;'";
 		}
-		if (($vn_item_id) | ($po_view->request->getAction() === 'Delete')) {
+		if (($vn_item_id) || ($po_view->request->getAction() === 'Delete')) {
 			$vs_buf = '<h3 class="nextPrevious" '.$vs_style.'>'.caEditorFindResultNavigation($po_view->request, $t_item, $o_result_context, $pa_options)."</h3>\n";
 		}
 		
@@ -726,7 +726,11 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 							$va_display_flag_buf[] = $t_item->getWithTemplate("{$vs_display_flag}");
 						}
 					}
-					if (sizeof($va_display_flag_buf) > 0) { $vs_buf .= join("; ", $va_display_flag_buf); }
+
+					if(!($vs_display_flag_delim = $po_view->request->config->get("{$vs_table_name}_inspector_display_flags_delimiter"))) {
+						$vs_display_flag_delim = '; ';
+					}
+					if (sizeof($va_display_flag_buf) > 0) { $vs_buf .= join($vs_display_flag_delim, $va_display_flag_buf); }
 				}
 				
 				$vs_label = '';
@@ -2005,7 +2009,9 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 	 * Returns a list of "^" prefixed-tags (eg. ^forename) present in a template
 	 *
 	 * @param string $ps_template
-	 * @param array $pa_options No options are currently supported
+	 * @param array $pa_options 
+	 *		stripOptions =
+	 *		parseOptions = 
 	 * 
 	 * @return array An array of tags
 	 */
@@ -2017,6 +2023,20 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 				$va_matches[1][$vn_i] = rtrim($vs_possible_tag, "/.%");	// remove trailing slashes, periods and percent signs as they're potentially valid tag characters that are never meant to be at the end
 			}
 			$va_tags = $va_matches[1];
+		}
+		
+		if (caGetOption('stripOptions', $pa_options, false)) {
+			foreach($va_tags as $vn_i => $vs_tag) {
+				$va_opts = caParseTagOptions($vs_tag);
+				
+				$va_tags[$vn_i] = $va_opts['tag'];
+			}
+		} elseif (caGetOption('parseOptions', $pa_options, false)) {
+			foreach($va_tags as $vn_i => $vs_tag) {
+				$va_opts = caParseTagOptions($vs_tag);
+				
+				$va_tags[$vn_i] = array_merge(array('originalTag' => $vs_tag), $va_opts);
+			}
 		}
 		
 		return $va_tags;
@@ -2031,12 +2051,14 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 	 *			prefix = string to add to beginning of tags extracted from template before doing lookup into value array
 	 *			removePrefix = string to remove from tags extracted from template before doing lookup into value array
 	 *			getFrom = a model instance to draw data from. If set, $pa_values is ignored.
+	 *			quote = quote replacement values (Eg. ^ca_objects.idno becomes "2015.001" rather than 2015.001). Value containing quotes will be escaped with a backslash. [Default is false]
 	 *
 	 * @return string Output of processed template
 	 */
 	function caProcessTemplate($ps_template, $pa_values, $pa_options=null) {
-		$vs_prefix = isset($pa_options['prefix']) ? $pa_options['prefix'] : null;
-		$vs_remove_prefix = isset($pa_options['removePrefix']) ? $pa_options['removePrefix'] : null;
+		$ps_prefix = caGetOption('prefix', $pa_options, null);
+		$ps_remove_prefix = caGetOption('removePrefix', $pa_options, null);
+		$pb_quote = caGetOption('quote', $pa_options, false);
 		
 		$va_tags = caGetTemplateTags($ps_template);
 		
@@ -2048,23 +2070,28 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		foreach($va_tags as $vs_tag) {
 			$va_tmp = explode("~", $vs_tag);
 			$vs_proc_tag = array_shift($va_tmp);
-			if ($vs_remove_prefix) {
-				$vs_proc_tag = str_replace($vs_remove_prefix, '', $vs_proc_tag);
+			if ($ps_remove_prefix) {
+				$vs_proc_tag = str_replace($ps_remove_prefix, '', $vs_proc_tag);
 			}
-			if ($vs_prefix) {
-				$vs_proc_tag = $vs_prefix.$vs_proc_tag;
+			if ($ps_prefix && !preg_match("!^".preg_quote($ps_prefix, "!")."!", $vs_proc_tag)) {
+				$vs_proc_tag = $ps_prefix.$vs_proc_tag;
 			}
 			
-			if ($t_instance && ($vs_gotten_val = $t_instance->get($vs_proc_tag, $pa_options))) {
-				$vs_gotten_val = caProcessTemplateTagDirectives($vs_gotten_val, $va_tmp);
-				$ps_template = str_replace('^'.$vs_tag, $vs_gotten_val, $ps_template);
+			if ($t_instance) {
+				$vs_gotten_val = caProcessTemplateTagDirectives($t_instance->get($vs_proc_tag, $pa_options), $va_tmp);
+				
+				$ps_template = preg_replace("/\^".preg_quote($vs_tag, '/')."(?![A-Za-z0-9]+)/", $vs_gotten_val, $ps_template);
 			} else {
 				if (is_array($vs_val = isset($pa_values[$vs_proc_tag]) ? $pa_values[$vs_proc_tag] : '')) {
 					// If value is an array try to make a string of it
 					$vs_val = join(" ", $vs_val);
 				}
+				
 				$vs_val = caProcessTemplateTagDirectives($vs_val, $va_tmp);
-				$ps_template = preg_replace("!\^(?={$vs_tag}[^A-Za-z0-9]+|{$vs_tag}$){$vs_tag}!", $vs_val, $ps_template);
+				
+				if ($pb_quote) { $vs_val = '"'.addslashes($vs_val).'"'; }
+				$vs_tag_proc = preg_quote($vs_tag, '/');
+				$ps_template = preg_replace("/\^(?={$vs_tag_proc}[^A-Za-z0-9]+|{$vs_tag_proc}$){$vs_tag_proc}/", str_replace("$", "\\$", $vs_val), $ps_template);	// escape "$" to prevent interpretation as backreferences
 			}
 		}
 		return $ps_template;
@@ -2088,7 +2115,7 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		if (!is_array($pa_directives) || !sizeof($pa_directives)) { return $ps_value; }
 		foreach($pa_directives as $vs_directive) {
 			$va_tmp = explode(":", $vs_directive);
-			switch($va_tmp[0]) {
+			switch(strtoupper($va_tmp[0])) {
 				case 'LP':		// left padding
 					$va_params = explode("/", $va_tmp[1]);
 					$vn_len = (int)$va_params[1];
@@ -2116,6 +2143,12 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 					if ((strlen($ps_value) > 0) && (strlen($va_tmp[1]))) {
 						$ps_value = $ps_value.$va_tmp[1];
 					}
+					break;
+				case 'LOWER':
+					$ps_value = strtolower($ps_value);
+					break;
+				case 'UPPER':
+					$ps_value = strtoupper($ps_value);
 					break;
 			}
 		}
@@ -3219,7 +3252,7 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		$va_start = $o_tep->getHistoricDateParts($pa_historic_timestamps[0]);
 		$va_end = $o_tep->getHistoricDateParts($pa_historic_timestamps[1]);
 		
-		if ($va_start['year'] < 0) { $va_start['year'] = 1900; }
+		//if ($va_start['year'] < 0) { $va_start['year'] = 1900; }
 		if ($va_end['year'] >= 2000000) { $va_end['year'] = date("Y"); }
 		
 		return array(
@@ -3372,6 +3405,8 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		$vs_template =								caGetOption('template', $pa_options, null);
 		
 		$va_exclude = 								caGetOption('exclude', $pa_options, array(), array('castTo' => 'array'));
+		$po_request = 								caGetOption('request', $pa_options, null);
+		if(!$po_request) { global $g_request; $po_request = $g_request; }
 		
 	
 		$va_display_format = $o_config->getList("{$vs_rel_table}_lookup_settings");
@@ -3383,6 +3418,8 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 		
 		$o_dm = Datamodel::load();
 		$t_rel = $o_dm->getInstanceByTableName($vs_rel_table, true);
+		/** @var ca_sets $t_set */
+		$t_set = $o_dm->getInstance('ca_sets', true);
 		$vs_type_id_fld = method_exists($t_rel, 'getTypeFieldName') ? $t_rel->getTypeFieldName() : null;
 		
 		$vn_c = 0;
@@ -3407,6 +3444,11 @@ define("__CA_BUNDLE_DISPLAY_TEMPLATE_TAG_REGEX__", "/\^([0-9]+(?=[.,;])|[\/A-Za-
 				
 				while($qr_rel_items->nextHit()) {
 					$vn_id = $qr_rel_items->get("{$vs_rel_table}.{$vs_rel_pk}");
+					if(($qr_rel_items->tableName() == 'ca_sets') && ($po_request instanceof RequestHTTP)) {
+						if(!$t_set->haveAccessToSet($po_request->getUserID(), __CA_ACL_EDIT_ACCESS__, $vn_id)) {
+							continue;
+						}
+					}
 					if(in_array($vn_id, $va_exclude)) { continue; }
 					
 					$va_item = array(
